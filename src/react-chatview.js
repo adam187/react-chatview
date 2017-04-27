@@ -2,11 +2,22 @@ import React from 'react';
 import ReactDOM from 'react-dom';
 import clone from 'lodash.clone';
 
+var supportsPassive = false;
+try {
+  var opts = Object.defineProperty({}, 'passive', {
+    get() {
+      supportsPassive = true;
+    },
+  });
+  window.addEventListener('test', null, opts);
+} catch (e) { /* pass */ }
+
 var ChatView = React.createClass({
 
   propTypes: {
     flipped: React.PropTypes.bool,
     scrollLoadThreshold: React.PropTypes.number,
+    shouldTriggerLoad: React.PropTypes.func,
     onInfiniteLoad: React.PropTypes.func.isRequired,
     loadingSpinnerDelegate: React.PropTypes.element,
     className: React.PropTypes.string
@@ -16,6 +27,7 @@ var ChatView = React.createClass({
     return {
       flipped: false,
       scrollLoadThreshold: 10,
+      shouldTriggerLoad: function() { return true; },
       loadingSpinnerDelegate: <div/>,
       className: ''
     };
@@ -45,8 +57,6 @@ var ChatView = React.createClass({
       {this.state.isInfiniteLoading ? this.props.loadingSpinnerDelegate : null}
     </div>;
 
-    // Must not hook onScroll event directly - that will break hardware accelerated scrolling.
-    // We poll it with requestAnimationFrame instead.
     return (
       <div className={this.props.className} ref="scrollable"
            style={{overflowX: 'hidden', overflowY: 'scroll'}}>
@@ -61,7 +71,7 @@ var ChatView = React.createClass({
 
   // detect when dom has changed underneath us- either scrollTop or scrollHeight (layout reflow)
   // may have changed.
-  pollScroll () {
+  onScroll() {
     var domNode = ReactDOM.findDOMNode(this);
     if (domNode.scrollTop !== this.scrollTop) {
       if (this.shouldTriggerLoad(domNode)) {
@@ -72,6 +82,10 @@ var ChatView = React.createClass({
       // the dom is ahead of the state
       this.updateScrollTop();
     }
+  },
+
+  pollScroll () {
+    this.onScroll()
     this.rafRequestId = window.requestAnimationFrame(this.pollScroll);
   },
 
@@ -88,7 +102,7 @@ var ChatView = React.createClass({
         domNode.scrollTop,
         domNode.scrollHeight,
         domNode.clientHeight);
-    return passedThreshold && !this.state.isInfiniteLoading;
+    return passedThreshold && !this.state.isInfiniteLoading && this.props.shouldTriggerLoad();
   },
 
   componentDidMount () {
@@ -102,10 +116,20 @@ var ChatView = React.createClass({
 
     scrollableDomEl.scrollTop = heightDifference;
     this.scrollTop = heightDifference;
-    this.rafRequestId = window.requestAnimationFrame(this.pollScroll);
+
+    // Unless passive events are supported, we must not hook onScroll event
+    // directly - that will break hardware accelerated scrolling. We poll it
+    // with requestAnimationFrame instead.
+    if (supportsPassive) {
+      scrollableDomEl.addEventListener('scroll', this.onScroll, {passive: true});
+    } else {
+      this.rafRequestId = window.requestAnimationFrame(this.pollScroll);
+    }
   },
 
   componentWillUnmount () {
+    var scrollableDomEl = ReactDOM.findDOMNode(this);
+    scrollableDomEl.removeEventListener('scroll', this.onScroll, {passive: true});
     window.cancelAnimationFrame(this.rafRequestId);
   },
 
